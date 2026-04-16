@@ -19,16 +19,16 @@ export default function RootLayout({
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
       </head>
-      <body className="min-h-screen bg-[#09090b] antialiased">
+      <body className="min-h-screen antialiased" style={{ background: 'var(--t-bg0)', color: 'var(--t-text)' }}>
         {children}
         <Toaster
           theme="dark"
           position="bottom-right"
           toastOptions={{
             style: {
-              background: '#18181b',
-              border: '1px solid #27272a',
-              color: '#fafafa',
+              background: 'var(--t-bg2)',
+              border: '1px solid var(--t-border)',
+              color: 'var(--t-text)',
               fontFamily: 'Outfit, sans-serif',
               fontSize: '13px',
             },

@@ -25,29 +25,44 @@ import { TextOverlayNode } from './nodes/TextOverlayNode';
 import { SharpenNode } from './nodes/SharpenNode';
 import { CropNode } from './nodes/CropNode';
 import { GrayscaleNode } from './nodes/GrayscaleNode';
+import { AutoAdjustNode } from './nodes/AutoAdjustNode';
+import { DayNightNode } from './nodes/DayNightNode';
+import { DenoiseNode } from './nodes/DenoiseNode';
+import { DetailEnhanceNode } from './nodes/DetailEnhanceNode';
+import { ColorGradingNode } from './nodes/ColorGradingNode';
 import NodePicker, { NodeDefinition } from './NodePicker';
-import { Play, Loader2, Plus } from 'lucide-react';
+import { Play, Loader2, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useThemeStore, THEMES } from '@/store/useThemeStore';
 
 const nodeTypes = {
-  imageUpload:  ImageUploadNode,
-  aiRelight:    AIRelightNode,
-  outputNode:   OutputNode,
-  resize:       ResizeNode,
-  colorAdjust:  ColorAdjustNode,
-  blur:         BlurNode,
-  bgRemove:     BackgroundRemoveNode,
-  upscale:      UpscaleNode,
-  textOverlay:  TextOverlayNode,
-  sharpen:      SharpenNode,
-  crop:         CropNode,
-  grayscale:    GrayscaleNode,
+  imageUpload: ImageUploadNode,
+  aiRelight: AIRelightNode,
+  autoAdjustNode: AutoAdjustNode,
+  dayNightNode: DayNightNode,
+  denoiseNode: DenoiseNode,
+  detailEnhanceNode: DetailEnhanceNode,
+  colorGradingNode: ColorGradingNode,
+  outputNode: OutputNode,
+  resize: ResizeNode,
+  colorAdjust: ColorAdjustNode,
+  blur: BlurNode,
+  bgRemove: BackgroundRemoveNode,
+  upscale: UpscaleNode,
+  textOverlay: TextOverlayNode,
+  sharpen: SharpenNode,
+  crop: CropNode,
+  grayscale: GrayscaleNode,
 };
 
 export default function Canvas() {
-  const { nodes, edges, onNodesChange, onEdgesChange, onConnect, updateNodeData } = useStore();
+  const { nodes, edges, onNodesChange, onEdgesChange, onConnect, updateNodeData, deleteNode } = useStore();
   const [isExecuting, setIsExecuting] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const themeId = useThemeStore(s => s.themeId);
+  const theme = THEMES.find(t => t.id === themeId) || THEMES[0];
+  
+  const selectedNodes = nodes.filter(n => n.selected);
 
   const handleAddNode = useCallback((def: NodeDefinition) => {
     const id = `${def.type}-${Date.now()}`;
@@ -71,10 +86,11 @@ export default function Canvas() {
       if (!ok) { toast.error(data.detail || 'Execution error'); setIsExecuting(false); return; }
 
       const jobId = data.job_id;
-      if (!jobId) { setIsExecuting(false); return; }
+      const streamToken = data.stream_token;
+      if (!jobId || !streamToken) { setIsExecuting(false); return; }
       toast('Workflow queued…', { icon: '⚡' });
 
-      const es = api.streamJob(jobId);
+      const es = api.streamJob(jobId, streamToken);
       es.onmessage = (ev) => {
         const d = JSON.parse(ev.data);
         if (d.status === 'completed') {
@@ -96,7 +112,7 @@ export default function Canvas() {
   }, [nodes, edges, updateNodeData]);
 
   return (
-    <div className="h-full w-full bg-[#09090b] relative">
+    <div className="h-full w-full relative" style={{ background: 'var(--t-bg0)' }}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -107,30 +123,51 @@ export default function Canvas() {
         connectionMode={ConnectionMode.Loose}
         fitView
         deleteKeyCode={['Backspace', 'Delete']}
+        proOptions={{ hideAttribution: true }}
         defaultEdgeOptions={{
-          style: { strokeWidth: 2, stroke: '#7c3aed' },
+          style: { strokeWidth: 2, stroke: theme.colors.accent },
           animated: true,
         }}
       >
-        <Background variant={BackgroundVariant.Dots} gap={24} size={0.8} color="#27272a" />
-        <Controls />
+        <Background variant={BackgroundVariant.Dots} gap={24} size={0.8} color={theme.colors.canvasDots} />
+        <Controls position="bottom-right" style={{ margin: '1rem', border: `1px solid ${theme.colors.border}`, background: theme.colors.bg1, borderRadius: 10, boxShadow: '0 4px 32px rgba(0,0,0,0.5)' }} />
 
         <Panel position="top-right" className="m-4 flex gap-2">
           <button
             onClick={() => setPickerOpen(!pickerOpen)}
-            className={`h-9 flex items-center gap-1.5 rounded-lg px-3 text-[13px] font-medium border transition-all duration-150 ${
-              pickerOpen
-                ? 'bg-[#18181b] text-white border-violet-500/40 shadow-lg shadow-black/30'
-                : 'bg-[#0f0f12] text-zinc-400 border-[#27272a] hover:text-zinc-200 hover:border-[#3f3f46]'
-            }`}
+            className="h-9 flex items-center gap-1.5 rounded-lg px-3 text-[13px] font-medium transition-all duration-150"
+            style={{
+              background: pickerOpen ? 'var(--t-bg2)' : 'var(--t-bg1)',
+              color: pickerOpen ? 'var(--t-text)' : 'var(--t-textMuted)',
+              border: pickerOpen ? `1px solid color-mix(in srgb, var(--t-accent) 40%, transparent)` : '1px solid var(--t-border)',
+              boxShadow: pickerOpen ? '0 4px 16px rgba(0,0,0,0.3)' : 'none',
+            }}
           >
             <Plus size={14} className={`transition-transform duration-200 ${pickerOpen ? 'rotate-45' : ''}`} />
             Add Node
           </button>
+          
+          {selectedNodes.length > 0 && (
+            <button
+              onClick={() => {
+                selectedNodes.forEach(n => deleteNode(n.id));
+                toast.success('Node deleted');
+              }}
+              className="h-9 flex items-center justify-center gap-1.5 rounded-lg px-3 text-[13px] font-medium text-red-400 bg-red-400/10 border border-red-400/20 hover:bg-red-400/20 transition-colors"
+            >
+              <Trash2 size={14} />
+              Delete Selection
+            </button>
+          )}
+
           <button
             onClick={handleExecute}
             disabled={isExecuting}
-            className="h-9 flex items-center gap-2 rounded-lg bg-violet-600 hover:bg-violet-500 px-4 text-[13px] font-semibold text-white shadow-lg shadow-violet-600/25 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            className="h-9 flex items-center gap-2 rounded-lg px-4 text-[13px] font-semibold text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{
+              background: 'var(--t-accent)',
+              boxShadow: `0 4px 16px color-mix(in srgb, var(--t-accent) 30%, transparent)`,
+            }}
           >
             {isExecuting
               ? <Loader2 size={14} className="animate-spin" />

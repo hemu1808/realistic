@@ -24,6 +24,7 @@ type AppState = {
   setNodes: (nodes: AppNode[]) => void;
   setEdges: (edges: Edge[]) => void;
   updateNodeData: (nodeId: string, data: any) => void;
+  deleteNode: (nodeId: string) => void;
 };
 
 const initialNodes: AppNode[] = [
@@ -85,6 +86,12 @@ export const useStore = create<AppState>((set, get) => ({
         }
         return node;
       }),
+    });
+  },
+  deleteNode: (nodeId: string) => {
+    set({
+      nodes: get().nodes.filter(n => n.id !== nodeId),
+      edges: get().edges.filter(e => e.source !== nodeId && e.target !== nodeId),
     });
   },
 }));

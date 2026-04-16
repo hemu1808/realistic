@@ -19,23 +19,26 @@ logging.basicConfig(level=logging.INFO)
 
 MONGO_URL = os.environ.get("MONGODB_URL", "mongodb://localhost:27017")
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
-NVIDIA_API_BASE = "https://ai.api.nvidia.com/v1/genai"
-NVIDIA_MODEL = "stabilityai/stable-diffusion-xl"
+NVIDIA_API_BASE = os.environ.get("NVIDIA_API_BASE", "https://ai.api.nvidia.com/v1/genai")
+NVIDIA_MODEL = os.environ.get("NVIDIA_MODEL", "stabilityai/stable-diffusion-xl")
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-STYLE_PRESETS = {
-    "neon-cyberpunk":   {"prompt": "Neon Cyberpunk city aesthetic, high detail, masterpiece",          "a_prompt": "best quality, extremely detailed, neon lights, rain reflections", "n_prompt": "lowres, bad anatomy"},
-    "studio-ghibli":   {"prompt": "Studio Ghibli anime art style, lush landscapes, dreamy atmosphere", "a_prompt": "best quality, hand-painted, soft lighting, whimsical",             "n_prompt": "photorealistic, 3d render, lowres"},
-    "oil-painting":    {"prompt": "Classical oil painting on canvas, rich brushstrokes",               "a_prompt": "best quality, impasto technique, dramatic chiaroscuro",            "n_prompt": "digital art, flat colors, lowres"},
-    "watercolor":      {"prompt": "Delicate watercolor painting, soft washes, paper texture visible",  "a_prompt": "best quality, transparent layers",                                  "n_prompt": "digital art, hard edges, photorealistic"},
-    "cinematic":       {"prompt": "Cinematic film still, anamorphic lens, color graded, moody",        "a_prompt": "best quality, depth of field, volumetric lighting, 35mm film",     "n_prompt": "flat lighting, amateur, lowres"},
-    "pencil-sketch":   {"prompt": "Detailed pencil sketch on paper, graphite shading, realistic",      "a_prompt": "best quality, cross-hatching, fine line work, textured paper",     "n_prompt": "color, digital art, lowres"},
-    "photorealistic":  {"prompt": "Ultra photorealistic, 8K, shot on Canon EOS R5, natural lighting",  "a_prompt": "best quality, extremely detailed, sharp focus, HDR",               "n_prompt": "illustration, painting, cartoon, lowres"},
-}
-# Extend with a fallback for any missing preset
-_DEFAULT_PRESET = STYLE_PRESETS["neon-cyberpunk"]
+# Import shared presets from main module to avoid duplication drift
+try:
+    from main import STYLE_PRESETS
+    _DEFAULT_PRESET = STYLE_PRESETS.get("neon-cyberpunk", {})
+except ImportError:
+    # Fallback minimal preset if main can't be imported
+    STYLE_PRESETS = {
+        "neon-cyberpunk": {
+            "prompt": "Neon Cyberpunk city aesthetic, high detail, masterpiece",
+            "a_prompt": "best quality, extremely detailed, neon lights, rain reflections",
+            "n_prompt": "lowres, bad anatomy",
+        },
+    }
+    _DEFAULT_PRESET = STYLE_PRESETS["neon-cyberpunk"]
 
 
 async def _call_nvidia(image_url, preset_id: str, base_url: str) -> str:
@@ -58,8 +61,10 @@ async def _call_nvidia(image_url, preset_id: str, base_url: str) -> str:
             async with httpx.AsyncClient(timeout=30.0) as c:
                 r = await c.get(image_url)
                 if r.status_code == 200:
-                    payload["init_image"] = base64.b64encode(r.content).decode()
+                    img_b64 = base64.b64encode(r.content).decode()
+                    payload["init_image"] = img_b64
                     payload["image_strength"] = 0.65
+                    logger.info(f"Worker: source image linked (len: {len(img_b64)})")
         except Exception as e:
             logger.warning(f"Could not fetch source image: {e}")
 
@@ -69,7 +74,7 @@ async def _call_nvidia(image_url, preset_id: str, base_url: str) -> str:
         "Accept": "application/json",
     }
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=240.0) as client:
         response = await client.post(
             f"{NVIDIA_API_BASE}/{NVIDIA_MODEL}",
             headers=headers,
@@ -94,14 +99,22 @@ async def _call_nvidia(image_url, preset_id: str, base_url: str) -> str:
 # ---------------------------------------------------------------------------
 # ARQ task function  (called by main.py via redis.enqueue_job)
 # ---------------------------------------------------------------------------
+_mongo_client = None
+
+async def _get_db():
+    """Reuse MongoDB connection pool across jobs instead of creating one per job."""
+    global _mongo_client
+    if _mongo_client is None:
+        from motor.motor_asyncio import AsyncIOMotorClient
+        _mongo_client = AsyncIOMotorClient(MONGO_URL, serverSelectionTimeoutMS=3000)
+    return _mongo_client.realhistic_db
+
+
 async def execute_nvidia_job(ctx, job_id: str, image_url: str, preset_id: str, base_url: str):
     """ARQ worker task — NVIDIA-powered image style transfer."""
     logger.info(f"[Worker] Starting job {job_id} | preset={preset_id}")
 
-    # Update job status in MongoDB
-    from motor.motor_asyncio import AsyncIOMotorClient
-    client = AsyncIOMotorClient(MONGO_URL, serverSelectionTimeoutMS=3000)
-    db = client.realhistic_db
+    db = await _get_db()
     jobs = db.jobs
 
     await jobs.update_one({"_id": job_id}, {"$set": {"status": "processing"}})
@@ -129,8 +142,6 @@ async def execute_nvidia_job(ctx, job_id: str, image_url: str, preset_id: str, b
             "error": str(e),
             "duration_seconds": round(time.monotonic() - start, 2),
         }})
-    finally:
-        client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +151,10 @@ async def startup(ctx):
     logger.info("[Worker] Started — MongoDB & Redis active.")
 
 async def shutdown(ctx):
+    global _mongo_client
+    if _mongo_client:
+        _mongo_client.close()
+        _mongo_client = None
     logger.info("[Worker] Shutting down.")
 
 from arq.connections import RedisSettings
